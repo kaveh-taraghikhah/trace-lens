@@ -1,0 +1,12 @@
+# Podman build context exclusions (.containerignore). Allow .deploy bundles.
+/node_modules
+/apps/**/node_modules
+/packages/**/node_modules
+/demo-services/**/node_modules
+.git
+.turbo
+**/.next
+**/*.md
+!README.md
+tests
+data

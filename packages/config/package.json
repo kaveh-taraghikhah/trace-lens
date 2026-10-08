@@ -1,0 +1,7 @@
+{
+  "name": "@tracelens/config",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared TypeScript configs for Node packages (extended by apps/api and demo-services).",
+  "files": ["tsconfig.node.json"]
+}

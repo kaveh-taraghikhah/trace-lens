@@ -1,0 +1,25 @@
+# Example Collector processor for production tail sampling.
+# Wire into traces pipeline processors after memory_limiter:
+#   processors: [memory_limiter, tail_sampling, batch]
+#
+# Intent (mirrors project_settings):
+#   100% errors · 100% slow (>1s) · 10% normal
+
+processors:
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 100
+    policies:
+      - name: errors-always
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: slow-always
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: normal-sample
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10

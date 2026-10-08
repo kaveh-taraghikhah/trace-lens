@@ -1,0 +1,9 @@
+# Runtime image for TraceLens API.
+# Host prep: pnpm --filter @tracelens/api deploy --prod .deploy/api
+# Build:     podman build -f apps/api/Containerfile -t localhost/tracelens-api .
+FROM docker.io/library/node:22-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+COPY .deploy/api/ ./
+EXPOSE 4000
+CMD ["node", "dist/server.js"]

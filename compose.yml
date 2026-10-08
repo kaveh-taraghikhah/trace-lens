@@ -1,0 +1,292 @@
+# TraceLens — Podman Compose stack (rootless-friendly).
+#
+# Entry:  pnpm run stack:up   →  scripts/podman-stack.sh
+# Docs:   docs/PODMAN.md
+#
+# Notes:
+# - Image refs use docker.io FQDNs (registry host, not the Docker engine).
+# - Bind mounts use :Z for SELinux (Fedora / RHEL rootless Podman).
+# - Compose key is still `dockerfile:` even when the file is named Containerfile.
+# - /docker-entrypoint-initdb.d is the Postgres image path; leave as-is.
+
+name: tracelens
+
+networks:
+  tracelens:
+    driver: bridge
+
+volumes:
+  demo-postgres-data:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:
+
+# Host HTTP(S)_PROXY must not leak into containers (breaks OTLP / internal DNS).
+x-no-proxy: &no-proxy
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  ALL_PROXY: ""
+  all_proxy: ""
+  NO_PROXY: "*"
+  no_proxy: "*"
+
+# Shared Podman-oriented defaults for locally built app containers.
+x-podman-app: &podman-app
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+x-demo-service: &demo-service
+  <<: *podman-app
+  build:
+    context: .
+    dockerfile: demo-services/Containerfile
+  networks: [tracelens]
+  environment: &demo-env
+    <<: *no-proxy
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    OTEL_TRACES_SAMPLER_ARG: "1.0"
+    LOG_LEVEL: info
+    DATABASE_URL: postgres://tracelens:tracelens@demo-postgres:5432/tracelens_demo
+    PRODUCT_API_URL: http://product-api:3002
+    ORDER_API_URL: http://order-api:3003
+    PAYMENT_API_URL: http://payment-api:3004
+    NOTIFICATION_URL: http://notification-worker:3005
+  depends_on:
+    demo-postgres:
+      condition: service_healthy
+    otel-collector:
+      condition: service_started
+
+services:
+  demo-postgres:
+    image: docker.io/library/postgres:16-alpine
+    <<: *podman-app
+    environment:
+      <<: *no-proxy
+      POSTGRES_USER: tracelens
+      POSTGRES_PASSWORD: tracelens
+      POSTGRES_DB: tracelens_demo
+    volumes:
+      - demo-postgres-data:/var/lib/postgresql/data
+      - ./demo-services/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:Z,ro
+    networks: [tracelens]
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracelens -d tracelens_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.116.1
+    <<: *podman-app
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      <<: *no-proxy
+    volumes:
+      - ./observability/otel-collector/config.yaml:/etc/otelcol/config.yaml:Z,ro
+    networks: [tracelens]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+
+  tempo:
+    image: docker.io/grafana/tempo:2.6.1
+    <<: *podman-app
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    environment:
+      <<: *no-proxy
+    volumes:
+      - ./observability/tempo/tempo-config.yaml:/etc/tempo/tempo-config.yaml:Z,ro
+      - tempo-data:/var/tempo
+    networks: [tracelens]
+    ports:
+      - "3200:3200"
+
+  loki:
+    image: docker.io/grafana/loki:3.3.2
+    <<: *podman-app
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    environment:
+      <<: *no-proxy
+    volumes:
+      - ./observability/loki/loki-config.yaml:/etc/loki/loki-config.yaml:Z,ro
+      - loki-data:/loki
+    networks: [tracelens]
+    ports:
+      - "3100:3100"
+
+  prometheus:
+    image: docker.io/prom/prometheus:v2.55.1
+    <<: *podman-app
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
+    environment:
+      <<: *no-proxy
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:Z,ro
+      - prometheus-data:/prometheus
+    networks: [tracelens]
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: docker.io/grafana/grafana:11.4.0
+    <<: *podman-app
+    environment:
+      <<: *no-proxy
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:Z,ro
+      - grafana-data:/var/lib/grafana
+    networks: [tracelens]
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+  product-api:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: demo-services/Containerfile
+      args:
+        SERVICE_NAME: product-api
+    environment:
+      <<: *demo-env
+      PORT: "3002"
+      OTEL_SERVICE_NAME: product-api
+    ports:
+      - "3002:3002"
+
+  payment-api:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: demo-services/Containerfile
+      args:
+        SERVICE_NAME: payment-api
+    environment:
+      <<: *demo-env
+      PORT: "3004"
+      OTEL_SERVICE_NAME: payment-api
+      SIMULATE_INCIDENT: "false"
+    ports:
+      - "3004:3004"
+
+  notification-worker:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: demo-services/Containerfile
+      args:
+        SERVICE_NAME: notification-worker
+    environment:
+      <<: *demo-env
+      PORT: "3005"
+      OTEL_SERVICE_NAME: notification-worker
+    ports:
+      - "3005:3005"
+
+  order-api:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: demo-services/Containerfile
+      args:
+        SERVICE_NAME: order-api
+    environment:
+      <<: *demo-env
+      PORT: "3003"
+      OTEL_SERVICE_NAME: order-api
+    ports:
+      - "3003:3003"
+    depends_on:
+      demo-postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+      product-api:
+        condition: service_started
+      payment-api:
+        condition: service_started
+      notification-worker:
+        condition: service_started
+
+  shop-api:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: demo-services/Containerfile
+      args:
+        SERVICE_NAME: shop-api
+    environment:
+      <<: *demo-env
+      PORT: "3001"
+      OTEL_SERVICE_NAME: shop-api
+    ports:
+      - "3001:3001"
+    depends_on:
+      demo-postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+      product-api:
+        condition: service_started
+      order-api:
+        condition: service_started
+
+  tracelens-api:
+    <<: *podman-app
+    build:
+      context: .
+      dockerfile: apps/api/Containerfile
+    networks: [tracelens]
+    environment:
+      <<: *no-proxy
+      PORT: "4000"
+      PROMETHEUS_URL: http://prometheus:9090
+      TEMPO_URL: http://tempo:3200
+      LOKI_URL: http://loki:3100
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SERVICE_NAME: tracelens-api
+    ports:
+      - "4000:4000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+      - otel-collector
+
+  tracelens-web:
+    <<: *podman-app
+    build:
+      context: .
+      dockerfile: apps/web/Containerfile
+    networks: [tracelens]
+    environment:
+      <<: *no-proxy
+      PORT: "3101"
+      TRACELENS_API_URL: http://tracelens-api:4000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    ports:
+      - "3101:3101"
+    depends_on:
+      - tracelens-api

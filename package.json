@@ -1,0 +1,29 @@
+{
+  "name": "tracelens",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --filter=./demo-services/* --filter=@tracelens/api --filter=@tracelens/web",
+    "dev:web": "pnpm --filter @tracelens/web dev",
+    "dev:api": "pnpm --filter @tracelens/api dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean",
+    "db:migrate": "pnpm --filter @tracelens/database build && pnpm --filter @tracelens/database migrate",
+    "deploy:demos": "node scripts/deploy-demos.mjs",
+    "stack:up": "./scripts/podman-stack.sh up",
+    "stack:down": "./scripts/podman-stack.sh down",
+    "stack:build": "./scripts/podman-stack.sh build",
+    "stack:ps": "./scripts/podman-stack.sh ps",
+    "stack:logs": "./scripts/podman-stack.sh logs"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

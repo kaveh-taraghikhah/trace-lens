@@ -1,0 +1,10 @@
+# Runtime-only image. Build artifacts on the host first:
+#   pnpm install && pnpm --filter @tracelens/types build && pnpm --filter @tracelens/telemetry build
+#   pnpm --filter @tracelens/$SERVICE_NAME deploy --prod --legacy ./.deploy/$SERVICE_NAME
+# Build: podman build -f demo-services/Containerfile --build-arg SERVICE_NAME=shop-api -t localhost/shop-api .
+FROM docker.io/library/node:22-bookworm-slim
+ARG SERVICE_NAME
+WORKDIR /app
+ENV NODE_ENV=production
+COPY .deploy/${SERVICE_NAME}/ ./
+CMD ["node", "dist/index.js"]
